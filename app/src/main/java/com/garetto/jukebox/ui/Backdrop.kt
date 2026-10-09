@@ -5,13 +5,11 @@ import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
-import android.graphics.RuntimeShader
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -40,14 +38,14 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.ShaderBrush
-import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -63,14 +61,17 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.sin
+import kotlin.random.Random
 
 data class BackdropState(
     /** true when the user picked their own photo. */
     val custom: Boolean = false,
     /** Bumped whenever the photo changes so the screen reloads it. */
     val version: Int = 0,
-    val smoke: Boolean = true,
+    val rain: Boolean = true,
 )
 
 /** The picture behind the full player screen. */
@@ -88,7 +89,7 @@ object Backdrop {
         prefs = p
         _state.value = BackdropState(
             custom = p.getBoolean("custom", false) && File(app.filesDir, FILE).exists(),
-            smoke = p.getBoolean("smoke", true),
+            rain = p.getBoolean("rain", true),
         )
     }
 
@@ -129,9 +130,9 @@ object Backdrop {
         _state.update { it.copy(custom = false, version = it.version + 1) }
     }
 
-    fun setSmoke(on: Boolean) {
-        prefs?.edit()?.putBoolean("smoke", on)?.apply()
-        _state.update { it.copy(smoke = on) }
+    fun setRain(on: Boolean) {
+        prefs?.edit()?.putBoolean("rain", on)?.apply()
+        _state.update { it.copy(rain = on) }
     }
 
     suspend fun load(context: Context): Bitmap? = withContext(Dispatchers.IO) {
@@ -143,7 +144,7 @@ object Backdrop {
     }
 }
 
-/** Photo + drifting smoke + a dark wash so the controls stay readable. */
+/** Photo + a dark wash so the controls stay readable + falling rain. */
 @Composable
 fun PlayerBackdrop() {
     val st by Backdrop.state.collectAsState()
@@ -181,50 +182,92 @@ fun PlayerBackdrop() {
                     )
                 )
         )
-        if (st.smoke && Build.VERSION.SDK_INT >= 33) {
-            SmokeLayer()
+        if (st.rain) {
+            RainLayer()
         }
     }
 }
 
-/**
- * Smoke drawn by the phone's graphics chip. It is rendered at one third of
- * the screen size and stretched, which keeps it soft and light on battery.
- */
-@RequiresApi(33)
-@Composable
-private fun SmokeLayer() {
-    val shader = remember {
-        try {
-            RuntimeShader(SMOKE_SHADER)
-        } catch (e: Exception) {
-            null
+private class Drop(val x: Float, val phase: Float, val speed: Float, val length: Float, val width: Float, val alpha: Float)
+
+private val drops: List<Drop> = Random(999).let { r ->
+    List(150) { i ->
+        // Three depths: far rain is thin, slow and faint; near rain is long, fast and bright.
+        val depth = when {
+            i < 80 -> 0.35f + r.nextFloat() * 0.2f
+            i < 130 -> 0.6f + r.nextFloat() * 0.2f
+            else -> 0.9f + r.nextFloat() * 0.3f
         }
-    } ?: return
-    val brush = remember(shader) { ShaderBrush(shader) }
+        Drop(
+            x = r.nextFloat(),
+            phase = r.nextFloat(),
+            speed = 0.55f + depth * 0.9f,
+            length = 0.025f + depth * 0.07f,
+            width = 0.5f + depth * 1.1f,
+            alpha = 0.10f + depth * 0.22f,
+        )
+    }
+}
+
+private fun rnd(a: Int, b: Int): Float {
+    val v = sin(a * 12.9898 + b * 78.233) * 43758.5453
+    return (v - floor(v)).toFloat()
+}
+
+/** Falling rain with ripples on the ground. Plain lines, so it stays smooth. */
+@Composable
+private fun RainLayer() {
     val time = remember { mutableFloatStateOf(0f) }
     LaunchedEffect(Unit) {
         var last = 0L
         while (true) {
             withFrameNanos { now ->
-                if (last != 0L) time.floatValue = (time.floatValue + (now - last) / 1_000_000_000f) % 3600f
+                if (last != 0L) time.floatValue = (time.floatValue + (now - last) / 1_000_000_000f) % 1000f
                 last = now
             }
         }
     }
-    Canvas(
-        Modifier
-            .fillMaxSize(1f / 3f)
-            .graphicsLayer {
-                scaleX = 3f
-                scaleY = 3f
-                transformOrigin = TransformOrigin(0f, 0f)
-                compositingStrategy = CompositingStrategy.Offscreen
-            }
-    ) {
-        shader.setFloatUniform("uRes", size.width, size.height)
-        shader.setFloatUniform("uTime", time.floatValue)
-        drawRect(brush)
+    val rainColor = Color(0xFFD6DCFF)
+    Canvas(Modifier.fillMaxSize()) {
+        val t = time.floatValue
+        val w = size.width
+        val h = size.height
+        val lean = 0.16f // how far the wind pushes the rain sideways
+        val dp = density
+
+        for (d in drops) {
+            val len = d.length * h
+            val u = (t * d.speed + d.phase) % 1f
+            val y = u * (h + len) - len
+            val x = d.x * (w + lean * h) - lean * h + (y + len) * lean
+            drawLine(
+                color = rainColor.copy(alpha = d.alpha),
+                start = Offset(x, y),
+                end = Offset(x + len * lean, y + len),
+                strokeWidth = d.width * dp,
+                cap = StrokeCap.Round,
+            )
+        }
+
+        // Ripples where drops land on the street (lower part of the picture)
+        for (i in 0 until 18) {
+            val period = 1.1f + rnd(i, 1) * 1.2f
+            val cycle = t / period + rnd(i, 2)
+            val k = floor(cycle.toDouble()).toInt()
+            val u = cycle - k
+            val yf = 0.66f + rnd(i, k * 3 + 5) * 0.32f
+            val cx = rnd(i, k * 7 + 11) * w
+            val cy = yf * h
+            val grow = (0.35f + (yf - 0.66f) * 2.2f) * 26f * dp
+            val rx = (0.15f + u) * grow
+            val fade = (1f - u) * (1f - u)
+            drawOval(
+                color = rainColor.copy(alpha = 0.30f * fade),
+                topLeft = Offset(cx - rx, cy - rx * 0.28f),
+                size = Size(rx * 2f, rx * 0.56f),
+                style = Stroke(width = 1.2f * dp),
+            )
+        }
     }
 }
 
@@ -266,26 +309,24 @@ fun BackdropDialog(onDismiss: () -> Unit) {
                 "Use the Chicago street",
                 tint = if (st.custom) Jx.Ink else Jx.Pink,
             ) { Backdrop.useDefault() }
-            if (Build.VERSION.SDK_INT >= 33) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Drifting smoke", color = Jx.Ink, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = st.smoke,
-                        onCheckedChange = { Backdrop.setSmoke(it) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Jx.Pink,
-                            uncheckedThumbColor = Jx.Muted,
-                            uncheckedTrackColor = Jx.Card,
-                            uncheckedBorderColor = Jx.Muted.copy(alpha = 0.5f),
-                        ),
-                    )
-                }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Falling rain", color = Jx.Ink, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = st.rain,
+                    onCheckedChange = { Backdrop.setRain(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Jx.Pink,
+                        uncheckedThumbColor = Jx.Muted,
+                        uncheckedTrackColor = Jx.Card,
+                        uncheckedBorderColor = Jx.Muted.copy(alpha = 0.5f),
+                    ),
+                )
             }
             Spacer(Modifier.height(6.dp))
             Text(
@@ -301,71 +342,3 @@ fun BackdropDialog(onDismiss: () -> Unit) {
         }
     }
 }
-
-/**
- * Thin plumes of smoke rising from street level plus a low mist.
- * Output is the smoke colour with transparency, drawn over the photo.
- */
-private const val SMOKE_SHADER = """
-uniform float2 uRes;
-uniform float uTime;
-
-float hash(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-}
-float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
-               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
-}
-float fbm(vec2 p) {
-    float a = 0.5;
-    float s = 0.0;
-    for (int i = 0; i < 4; i++) {
-        s += a * noise(p);
-        p = p * 2.03 + vec2(17.1, 9.2);
-        a *= 0.5;
-    }
-    return s;
-}
-vec4 smoke(vec2 uv, float asp, float t) {
-    float up = 1.0 - uv.y;
-    float a = 0.0;
-    for (int i = 0; i < 4; i++) {
-        float fi = float(i);
-        vec2 src = vec2(0.14, 0.27);
-        if (i == 1) { src = vec2(0.47, 0.34); }
-        if (i == 2) { src = vec2(0.90, 0.21); }
-        if (i == 3) { src = vec2(0.66, 0.30); }
-        float h = up - src.y;
-        if (h > 0.0) {
-            float dx = (uv.x - src.x) * asp;
-            float sway = (fbm(vec2(h * 3.0 - t * 0.10, fi * 5.3)) - 0.5) * 0.45 * h;
-            float width = 0.008 + h * 0.12;
-            float e = (dx - sway) / width;
-            float env = exp(-e * e) * smoothstep(0.0, 0.10, h) * exp(-h * 2.0);
-            vec2 w = vec2((dx - sway) / (0.2 + h), h) * vec2(5.0, 3.4);
-            w.y -= t * 0.20;
-            w += 1.6 * vec2(fbm(w * 1.2 + vec2(fi * 3.0, t * 0.05)), fbm(w * 1.2 + vec2(7.0, -t * 0.04)));
-            float n = fbm(w + fi * 11.0);
-            float strand = 1.0 - abs(2.0 * n - 1.0);
-            strand = strand * strand;
-            strand = strand * strand;
-            a += env * (0.16 * smoothstep(0.35, 0.75, n) + 1.15 * strand);
-        }
-    }
-    float mist = fbm(vec2(uv.x * asp * 4.0 + t * 0.03, up * 6.0 - t * 0.04));
-    a += mist * mist * smoothstep(0.40, 0.02, up) * 0.5;
-    a = clamp(a, 0.0, 0.6);
-    vec3 c = mix(vec3(0.62, 0.58, 0.72), vec3(1.0, 0.84, 0.70), smoothstep(0.5, 0.0, up));
-    return vec4(c * a, a);
-}
-half4 main(float2 fragCoord) {
-    vec2 uv = fragCoord / uRes;
-    return half4(smoke(uv, uRes.x / uRes.y, uTime));
-}
-"""
