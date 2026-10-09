@@ -7,6 +7,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.garetto.jukebox.audio.PlayerEngine
+import com.garetto.jukebox.ui.Backdrop
 import com.garetto.jukebox.ui.JukeboxApp
 import com.garetto.jukebox.ui.JukeboxTheme
 
@@ -18,6 +19,7 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
         PlayerEngine.init(applicationContext)
+        Backdrop.init(applicationContext)
         setContent {
             JukeboxTheme {
                 JukeboxApp()

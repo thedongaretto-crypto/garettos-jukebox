@@ -133,7 +133,7 @@ fun SongMenu(song: Song, inPlaylist: Long?, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun MenuRow(glyph: Glyph, text: String, tint: Color = Jx.Ink, onClick: () -> Unit) {
+fun MenuRow(glyph: Glyph, text: String, tint: Color = Jx.Ink, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()

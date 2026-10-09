@@ -68,6 +68,10 @@ fun NowPlayingScreen(state: PlayerState, onClose: () -> Unit, onOpenLab: () -> U
     val user by UserData.state.collectAsState()
     val isFavorite = song != null && song.id in user.favorites
     var menuOpen by remember { mutableStateOf(false) }
+    var backdropOpen by remember { mutableStateOf(false) }
+    if (backdropOpen) {
+        BackdropDialog(onDismiss = { backdropOpen = false })
+    }
     if (menuOpen && song != null) {
         SongMenu(song, inPlaylist = null, onDismiss = { menuOpen = false })
     }
@@ -77,7 +81,7 @@ fun NowPlayingScreen(state: PlayerState, onClose: () -> Unit, onOpenLab: () -> U
             .background(Jx.Bg)
             .blockTouches()
     ) {
-        AuroraBackground(intensity = 1.35f)
+        PlayerBackdrop()
 
         Column(
             Modifier
@@ -201,7 +205,10 @@ fun NowPlayingScreen(state: PlayerState, onClose: () -> Unit, onOpenLab: () -> U
                 )
             }
             Spacer(Modifier.height(14.dp))
-            Chip("Audio Lab  ·  EQ, bass, crossfade", selected = false, onClick = onOpenLab)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Chip("Audio Lab", selected = false, onClick = onOpenLab)
+                Chip("Background", selected = false, onClick = { backdropOpen = true })
+            }
             Spacer(Modifier.height(18.dp))
         }
     }
