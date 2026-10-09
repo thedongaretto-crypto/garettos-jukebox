@@ -15,6 +15,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import com.garetto.jukebox.data.Song
+import com.garetto.jukebox.data.UserData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -85,6 +86,7 @@ object PlayerEngine {
     private var hasFocus = false
     private var errorStreak = 0
     private var tickerRunning = false
+    private var counted = false
 
     private val attrs: AudioAttributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -140,6 +142,7 @@ object PlayerEngine {
         app = context.applicationContext
         audioManager = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         AudioSettings.init(app)
+        UserData.init(app)
         sessionId = audioManager.generateAudioSessionId()
         rack = EffectsRack(sessionId)
 
@@ -299,6 +302,7 @@ object PlayerEngine {
             mp.setAudioAttributes(attrs)
             mp.setWakeMode(app, PowerManager.PARTIAL_WAKE_LOCK)
             mp.setDataSource(app, song.uri)
+            attachReverb(mp)
             mp
         } catch (e: Exception) {
             try {
@@ -311,6 +315,7 @@ object PlayerEngine {
 
     private fun startCurrent(playWhenReady: Boolean) {
         releasePlayers()
+        counted = false
         val song = _state.value.song ?: return
         wantPlay = playWhenReady
         _position.value = 0L
@@ -404,6 +409,7 @@ object PlayerEngine {
         mp.setOnPreparedListener { p ->
             if (p === incoming) {
                 incomingPrepared = true
+                applyVolumes()
                 armTransition(force = true)
             }
         }
@@ -472,6 +478,7 @@ object PlayerEngine {
         incomingPrepared = false
         incomingIndex = -1
         gaplessArmed = false
+        counted = false
 
         if (fade && old != null) {
             outgoing?.let { release(it) }
@@ -543,6 +550,12 @@ object PlayerEngine {
             }
             _position.value = pos
 
+            // Count a listen once a decent chunk of the song has played.
+            if (!counted && dur > 0L && pos >= min(30_000L, dur / 2L)) {
+                counted = true
+                _state.value.song?.let { UserData.bumpPlay(it.id) }
+            }
+
             val cfg = AudioSettings.config.value
             if (cfg.crossfadeSec > 0f && outgoing == null && incoming != null && incomingPrepared && dur > 0L) {
                 val xf = min((cfg.crossfadeSec * 1000f).toLong(), dur / 3L)
@@ -590,6 +603,29 @@ object PlayerEngine {
         }
         try {
             o?.setVolume(left * outGain, right * outGain)
+        } catch (e: Exception) {
+        }
+        val send = reverbSend()
+        for (p in listOf(active, incoming, o)) {
+            try {
+                p?.setAuxEffectSendLevel(send)
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    private fun reverbSend(): Float {
+        val cfg = AudioSettings.config.value
+        return if (cfg.effectsOn && cfg.reverb > 0) cfg.reverbAmount.coerceIn(0f, 1f) else 0f
+    }
+
+    /** Route part of this player's sound into the shared reverb. */
+    private fun attachReverb(p: MediaPlayer) {
+        val id = rack?.reverbId ?: 0
+        if (id == 0) return
+        try {
+            p.attachAuxEffect(id)
+            p.setAuxEffectSendLevel(reverbSend())
         } catch (e: Exception) {
         }
     }

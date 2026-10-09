@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 
 enum class Glyph {
     Play, Pause, Next, Prev, Shuffle, Loop, LoopOne, Back, Down,
-    Sliders, Search, Close, Plus, Moon, Note,
+    Sliders, Search, Close, Plus, Moon, Note, Heart, HeartFilled, More, Check,
 }
 
 /** Hand-drawn icons, so the app needs no icon library. */
@@ -170,6 +170,37 @@ fun GlyphIcon(glyph: Glyph, tint: Color = Jx.Ink, modifier: Modifier = Modifier.
                     addOval(Rect(center = c, radius = s * 0.3f))
                 }
                 drawPath(Path.combine(PathOperation.Difference, full, bite), tint)
+            }
+
+            Glyph.Heart, Glyph.HeartFilled -> {
+                val heart = Path().apply {
+                    fun m(x: Float, y: Float) = pt(x, y).let { moveTo(it.x, it.y) }
+                    fun c(x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float) {
+                        val a = pt(x1, y1)
+                        val b = pt(x2, y2)
+                        val d = pt(x3, y3)
+                        cubicTo(a.x, a.y, b.x, b.y, d.x, d.y)
+                    }
+                    m(0.5f, 0.84f)
+                    c(0.04f, 0.56f, 0.12f, 0.18f, 0.34f, 0.18f)
+                    c(0.44f, 0.18f, 0.5f, 0.26f, 0.5f, 0.33f)
+                    c(0.5f, 0.26f, 0.56f, 0.18f, 0.66f, 0.18f)
+                    c(0.88f, 0.18f, 0.96f, 0.56f, 0.5f, 0.84f)
+                    close()
+                }
+                if (glyph == Glyph.HeartFilled) drawPath(heart, tint)
+                drawPath(heart, tint, style = stroke)
+            }
+
+            Glyph.More -> {
+                drawCircle(tint, radius = s * 0.075f, center = pt(0.5f, 0.22f))
+                drawCircle(tint, radius = s * 0.075f, center = pt(0.5f, 0.5f))
+                drawCircle(tint, radius = s * 0.075f, center = pt(0.5f, 0.78f))
+            }
+
+            Glyph.Check -> {
+                line(0.2f, 0.52f, 0.42f, 0.74f)
+                line(0.42f, 0.74f, 0.8f, 0.28f)
             }
 
             Glyph.Note -> {

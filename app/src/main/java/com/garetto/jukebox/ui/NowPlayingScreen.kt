@@ -60,10 +60,17 @@ import com.garetto.jukebox.audio.LoopMode
 import com.garetto.jukebox.audio.PlayerEngine
 import com.garetto.jukebox.audio.PlayerState
 import com.garetto.jukebox.data.Song
+import com.garetto.jukebox.data.UserData
 
 @Composable
 fun NowPlayingScreen(state: PlayerState, onClose: () -> Unit, onOpenLab: () -> Unit) {
     val song = state.song
+    val user by UserData.state.collectAsState()
+    val isFavorite = song != null && song.id in user.favorites
+    var menuOpen by remember { mutableStateOf(false) }
+    if (menuOpen && song != null) {
+        SongMenu(song, inPlaylist = null, onDismiss = { menuOpen = false })
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -126,6 +133,12 @@ fun NowPlayingScreen(state: PlayerState, onClose: () -> Unit, onOpenLab: () -> U
             Spacer(Modifier.height(16.dp))
 
             // Title slides in when the song changes
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconBtn(
+                if (isFavorite) Glyph.HeartFilled else Glyph.Heart,
+                { song?.let { UserData.toggleFavorite(it.id) } },
+                tint = if (isFavorite) Jx.Pink else Jx.Muted,
+            )
             AnimatedContent(
                 targetState = song,
                 transitionSpec = {
@@ -134,7 +147,7 @@ fun NowPlayingScreen(state: PlayerState, onClose: () -> Unit, onOpenLab: () -> U
                 },
                 contentKey = { it?.id },
                 label = "title",
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.weight(1f),
             ) { s ->
                 Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
@@ -157,6 +170,8 @@ fun NowPlayingScreen(state: PlayerState, onClose: () -> Unit, onOpenLab: () -> U
                         textAlign = TextAlign.Center,
                     )
                 }
+            }
+            IconBtn(Glyph.Plus, { menuOpen = true }, tint = Jx.Muted)
             }
             Spacer(Modifier.height(10.dp))
 

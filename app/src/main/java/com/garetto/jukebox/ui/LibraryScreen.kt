@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,9 +53,20 @@ import com.garetto.jukebox.audio.PlayerEngine
 import com.garetto.jukebox.audio.PlayerState
 import com.garetto.jukebox.data.MusicLibrary
 import com.garetto.jukebox.data.Song
+import com.garetto.jukebox.data.UserData
 import kotlinx.coroutines.launch
 
-private data class SongGroup(val name: String, val subtitle: String, val songs: List<Song>)
+private data class SongGroup(val key: String, val name: String, val subtitle: String, val songs: List<Song>)
+
+private val tabNames = listOf("Songs", "Favorites", "Most played", "Playlists", "Albums", "Artists")
+private const val T_SONGS = 0
+private const val T_FAVORITES = 1
+private const val T_TOP = 2
+private const val T_PLAYLISTS = 3
+private const val T_ALBUMS = 4
+private const val T_ARTISTS = 5
+
+private fun countLabel(n: Int) = if (n == 1) "1 song" else "$n songs"
 
 @Composable
 fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () -> Unit) {
@@ -61,19 +74,31 @@ fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () ->
     val scope = rememberCoroutineScope()
     val songs by MusicLibrary.songs.collectAsState()
     val loading by MusicLibrary.loading.collectAsState()
+    val user by UserData.state.collectAsState()
 
-    var tab by rememberSaveable { mutableStateOf(0) }
+    var tab by rememberSaveable { mutableStateOf(T_SONGS) }
     var query by rememberSaveable { mutableStateOf("") }
+    // The album name, artist name or playlist id that is currently opened.
     var group by rememberSaveable { mutableStateOf<String?>(null) }
+    var menuSong by remember { mutableStateOf<Song?>(null) }
+    var namingPlaylist by remember { mutableStateOf(false) }
     val q = query.trim()
 
     BackHandler(enabled = group != null) { group = null }
 
-    val shown: List<Song> = remember(songs, q, tab, group) {
+    val byId = remember(songs) { songs.associateBy { it.id } }
+    val openPlaylist = if (tab == T_PLAYLISTS) user.playlists.firstOrNull { it.id.toString() == group } else null
+
+    val shown: List<Song> = remember(songs, q, tab, group, user) {
         val g = group
         val base = when {
-            tab == 1 && g != null -> songs.filter { it.album == g }.sortedBy { it.track }
-            tab == 2 && g != null -> songs.filter { it.artist == g }
+            tab == T_FAVORITES -> songs.filter { it.id in user.favorites }
+            tab == T_TOP -> songs.filter { (user.plays[it.id] ?: 0) > 0 }
+                .sortedByDescending { user.plays[it.id] ?: 0 }
+                .take(100)
+            tab == T_PLAYLISTS && g != null -> openPlaylist?.songIds?.mapNotNull { byId[it] } ?: emptyList()
+            tab == T_ALBUMS && g != null -> songs.filter { it.album == g }.sortedBy { it.track }
+            tab == T_ARTISTS && g != null -> songs.filter { it.artist == g }
             else -> songs
         }
         if (q.isEmpty()) base
@@ -83,20 +108,25 @@ fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () ->
                 it.album.contains(q, ignoreCase = true)
         }
     }
-    val groups: List<SongGroup> = remember(songs, q, tab) {
+    val groups: List<SongGroup> = remember(songs, q, tab, user.playlists) {
         val all = when (tab) {
-            1 -> songs.groupBy { it.album }.map { (name, list) ->
-                SongGroup(name, list.first().artist, list)
+            T_PLAYLISTS -> user.playlists.map { p ->
+                val list = p.songIds.mapNotNull { byId[it] }
+                SongGroup(p.id.toString(), p.name, countLabel(list.size), list)
             }
-            2 -> songs.groupBy { it.artist }.map { (name, list) ->
-                SongGroup(name, if (list.size == 1) "1 song" else "${list.size} songs", list)
-            }
+            T_ALBUMS -> songs.groupBy { it.album }.map { (name, list) ->
+                SongGroup(name, name, list.first().artist, list)
+            }.sortedBy { it.name.lowercase() }
+            T_ARTISTS -> songs.groupBy { it.artist }.map { (name, list) ->
+                SongGroup(name, name, countLabel(list.size), list)
+            }.sortedBy { it.name.lowercase() }
             else -> emptyList()
         }
         all.filter { q.isEmpty() || it.name.contains(q, ignoreCase = true) }
-            .sortedBy { it.name.lowercase() }
     }
-    val showGroups = tab != 0 && group == null
+    val groupTab = tab == T_PLAYLISTS || tab == T_ALBUMS || tab == T_ARTISTS
+    val showGroups = groupTab && group == null
+    val groupTitle = if (tab == T_PLAYLISTS) openPlaylist?.name ?: "" else group ?: ""
 
     Column(
         Modifier
@@ -159,12 +189,15 @@ fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () ->
             }
         }
 
-        // Tabs
+        // Tabs (swipe sideways for more)
         Row(
-            Modifier.padding(horizontal = 16.dp),
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            listOf("Songs", "Albums", "Artists").forEachIndexed { i, name ->
+            tabNames.forEachIndexed { i, name ->
                 Chip(name, selected = tab == i, onClick = {
                     tab = i
                     group = null
@@ -183,8 +216,25 @@ fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () ->
                     Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 12.dp),
                 ) {
-                    items(groups, key = { "g:" + it.name }) { g ->
-                        GroupRow(g, round = tab == 2, modifier = Modifier.animateItem()) { group = g.name }
+                    if (tab == T_PLAYLISTS) {
+                        item(key = "newPlaylist") {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                NeonButton("New playlist", { namingPlaylist = true }, glyph = Glyph.Plus)
+                            }
+                        }
+                        if (groups.isEmpty()) {
+                            item(key = "noLists") {
+                                Hint("No playlists yet. Make one here, or tap the three dots next to any song.")
+                            }
+                        }
+                    }
+                    items(groups, key = { "g:" + it.key }) { g ->
+                        GroupRow(g, round = tab == T_ARTISTS, modifier = Modifier.animateItem()) { group = g.key }
                     }
                 }
 
@@ -199,11 +249,10 @@ fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () ->
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            val g = group
-                            if (g != null) {
+                            if (group != null) {
                                 IconBtn(Glyph.Back, { group = null }, size = 40.dp)
                                 Text(
-                                    g,
+                                    groupTitle,
                                     color = Jx.Ink,
                                     fontSize = 17.sp,
                                     fontWeight = FontWeight.Bold,
@@ -211,10 +260,25 @@ fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () ->
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f).padding(end = 10.dp),
                                 )
+                                if (openPlaylist != null) {
+                                    Text(
+                                        "Delete",
+                                        color = Jx.Muted,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier
+                                            .bounceClick {
+                                                UserData.deletePlaylist(openPlaylist.id)
+                                                group = null
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    )
+                                }
                             } else {
                                 Spacer(Modifier.weight(1f))
                             }
-                            NeonButton("Shuffle", { PlayerEngine.shuffleAll(shown) }, glyph = Glyph.Shuffle)
+                            if (shown.isNotEmpty()) {
+                                NeonButton("Shuffle", { PlayerEngine.shuffleAll(shown) }, glyph = Glyph.Shuffle)
+                            }
                         }
                     }
                     itemsIndexed(shown, key = { _, s -> s.id }) { i, s ->
@@ -222,18 +286,30 @@ fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () ->
                             song = s,
                             current = state.song?.id == s.id,
                             playing = state.isPlaying,
+                            favorite = s.id in user.favorites,
+                            trailing = if (tab == T_TOP) {
+                                val n = user.plays[s.id] ?: 0
+                                if (n == 1) "1 play" else "$n plays"
+                            } else {
+                                formatTime(s.durationMs)
+                            },
+                            rank = if (tab == T_TOP && q.isEmpty()) i + 1 else 0,
                             modifier = Modifier.animateItem(),
+                            onMore = { menuSong = s },
                         ) {
                             if (state.song?.id == s.id) onOpenPlayer() else PlayerEngine.play(shown, i)
                         }
                     }
                     if (shown.isEmpty()) {
                         item(key = "none") {
-                            Text(
-                                "Nothing matches \"$q\"",
-                                color = Jx.Muted,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth().padding(40.dp),
+                            Hint(
+                                when {
+                                    q.isNotEmpty() -> "Nothing matches \"$q\""
+                                    tab == T_FAVORITES -> "No favorites yet. Tap the three dots next to a song, or the heart on the player."
+                                    tab == T_TOP -> "Your most listened songs will show up here once you have played some music."
+                                    tab == T_PLAYLISTS -> "This playlist is empty. Tap the three dots next to any song to add it."
+                                    else -> "Nothing here yet."
+                                }
                             )
                         }
                     }
@@ -243,6 +319,33 @@ fun LibraryScreen(state: PlayerState, onOpenPlayer: () -> Unit, onOpenLab: () ->
 
         MiniPlayer(state, onOpenPlayer)
     }
+
+    menuSong?.let { s ->
+        SongMenu(s, inPlaylist = openPlaylist?.id, onDismiss = { menuSong = null })
+    }
+    if (namingPlaylist) {
+        NameDialog(
+            title = "New playlist",
+            label = "Playlist name",
+            onDismiss = { namingPlaylist = false },
+            onSave = { name ->
+                UserData.createPlaylist(name)
+                namingPlaylist = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun Hint(text: String) {
+    Text(
+        text,
+        color = Jx.Muted,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp, vertical = 36.dp),
+    )
 }
 
 @Composable
@@ -281,7 +384,11 @@ private fun SongRow(
     song: Song,
     current: Boolean,
     playing: Boolean,
+    favorite: Boolean,
+    trailing: String,
+    rank: Int,
     modifier: Modifier = Modifier,
+    onMore: () -> Unit,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(18.dp)
@@ -297,20 +404,37 @@ private fun SongRow(
             .clip(shape)
             .background(highlight)
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (rank > 0) {
+            Text(
+                "$rank",
+                color = if (rank <= 3) Jx.Pink else Jx.Muted,
+                fontFamily = Jx.Mono,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(30.dp),
+            )
+        }
         ArtBox(song, Modifier.size(52.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                song.title,
-                color = if (current) Color.White else Jx.Ink,
-                fontSize = 15.sp,
-                fontWeight = if (current) FontWeight.Bold else FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (favorite) {
+                    GlyphIcon(Glyph.HeartFilled, Jx.Pink, Modifier.size(12.dp))
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(
+                    song.title,
+                    color = if (current) Color.White else Jx.Ink,
+                    fontSize = 15.sp,
+                    fontWeight = if (current) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Spacer(Modifier.height(2.dp))
             Text(
                 song.artist,
@@ -324,9 +448,9 @@ private fun SongRow(
         if (current) {
             PlayingBars(playing)
         } else {
-            Text(formatTime(song.durationMs), color = Jx.Muted, fontSize = 12.sp, fontFamily = Jx.Mono)
+            Text(trailing, color = Jx.Muted, fontSize = 12.sp, fontFamily = Jx.Mono, maxLines = 1)
         }
-        Spacer(Modifier.width(6.dp))
+        IconBtn(Glyph.More, onMore, tint = Jx.Muted, size = 40.dp)
     }
 }
 

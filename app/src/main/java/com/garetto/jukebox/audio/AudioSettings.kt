@@ -19,6 +19,8 @@ data class AudioConfig(
     val surround: Int = 0,
     /** 0 = off, 1..6 = room presets */
     val reverb: Int = 0,
+    /** How much reverb is mixed in, 0..1 */
+    val reverbAmount: Float = 0.7f,
     /** Extra loudness in dB, 0..12 */
     val loudnessDb: Float = 0f,
     /** Seconds of overlap between songs, 0 = off */
@@ -69,6 +71,7 @@ object AudioSettings {
             .put("bass", c.bass)
             .put("surround", c.surround)
             .put("reverb", c.reverb)
+            .put("reverbAmount", c.reverbAmount.toDouble())
             .put("loudness", c.loudnessDb.toDouble())
             .put("crossfade", c.crossfadeSec.toDouble())
             .put("gapless", c.gapless)
@@ -99,6 +102,7 @@ object AudioSettings {
             bass = o.optInt("bass", 0).coerceIn(0, 1000),
             surround = o.optInt("surround", 0).coerceIn(0, 1000),
             reverb = o.optInt("reverb", 0).coerceIn(0, 6),
+            reverbAmount = o.optDouble("reverbAmount", 0.7).toFloat().coerceIn(0f, 1f),
             loudnessDb = o.optDouble("loudness", 0.0).toFloat().coerceIn(0f, 12f),
             crossfadeSec = o.optDouble("crossfade", 0.0).toFloat().coerceIn(0f, 12f),
             gapless = o.optBoolean("gapless", true),

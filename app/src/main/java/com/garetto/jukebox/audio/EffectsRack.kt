@@ -17,7 +17,9 @@ class EffectsRack(sessionId: Int) {
     private val eq: Equalizer? = make { Equalizer(0, sessionId) }
     private val bass: BassBoost? = make { BassBoost(0, sessionId) }
     private val virtualizer: Virtualizer? = make { Virtualizer(0, sessionId) }
-    private val reverb: PresetReverb? = make { PresetReverb(0, sessionId) }
+    // Reverb is a "send" effect: it lives on the output mix and each player
+    // feeds some of its sound into it (see PlayerEngine).
+    private val reverb: PresetReverb? = make { PresetReverb(0, 0) }
     private val loudness: LoudnessEnhancer? = make { LoudnessEnhancer(sessionId) }
 
     val hasEq: Boolean get() = eq != null
@@ -25,6 +27,14 @@ class EffectsRack(sessionId: Int) {
     val hasSurround: Boolean get() = virtualizer != null
     val hasReverb: Boolean get() = reverb != null
     val hasLoudness: Boolean get() = loudness != null
+
+    /** Id players attach to in order to send sound into the reverb; 0 if unavailable. */
+    val reverbId: Int
+        get() = try {
+            reverb?.id ?: 0
+        } catch (t: Throwable) {
+            0
+        }
 
     val bandCount: Int
     /** Centre frequency of each band in Hz. */

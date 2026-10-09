@@ -28,11 +28,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.withFrameNanos
@@ -428,5 +433,27 @@ fun MonoLabel(text: String, modifier: Modifier = Modifier, color: Color = Jx.Mut
         letterSpacing = 2.sp,
         fontWeight = FontWeight.Medium,
         maxLines = 1,
+    )
+}
+
+/** Small pop-up that asks for a name (new playlist, saved preset). */
+@Composable
+fun NameDialog(title: String, label: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Jx.CardHi,
+        titleContentColor = Jx.Ink,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.take(30) },
+                singleLine = true,
+                label = { Text(label) },
+            )
+        },
+        confirmButton = { TextButton(onClick = { onSave(name) }) { Text("Save", color = Jx.Pink) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Jx.Muted) } },
     )
 }

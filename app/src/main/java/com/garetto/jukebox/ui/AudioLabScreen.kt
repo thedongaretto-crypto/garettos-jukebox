@@ -175,7 +175,9 @@ fun AudioLabScreen(onBack: () -> Unit) {
                             )
                         }
                         if (saving) {
-                            SavePresetDialog(
+                            NameDialog(
+                                title = "Save this sound",
+                                label = "Preset name",
                                 onDismiss = { saving = false },
                                 onSave = { raw ->
                                     val name = raw.trim()
@@ -224,6 +226,14 @@ fun AudioLabScreen(onBack: () -> Unit) {
                         reverbNames.forEachIndexed { i, name ->
                             Chip(name, selected = cfg.reverb == i, onClick = { update { it.copy(reverb = i) } })
                         }
+                    }
+                    if (cfg.reverb > 0) {
+                        LabeledSlider(
+                            title = "Reverb amount",
+                            valueText = "${(cfg.reverbAmount * 100f).roundToInt()}%",
+                            value = cfg.reverbAmount,
+                            onChange = { v -> update { it.copy(reverbAmount = (v * 20f).roundToInt() / 20f) } },
+                        )
                     }
                     Note("Surround is made for headphones. High loudness can distort, so back it off if the sound gets crunchy.")
                 }
@@ -344,27 +354,6 @@ private fun LabeledSlider(
         }
         NeonSlider(value = value, onChange = onChange, centered = centered)
     }
-}
-
-@Composable
-private fun SavePresetDialog(onDismiss: () -> Unit, onSave: (String) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Jx.CardHi,
-        titleContentColor = Jx.Ink,
-        title = { Text("Save this sound") },
-        text = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it.take(24) },
-                singleLine = true,
-                label = { Text("Preset name") },
-            )
-        },
-        confirmButton = { TextButton(onClick = { onSave(name) }) { Text("Save", color = Jx.Pink) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Jx.Muted) } },
-    )
 }
 
 private fun hzLabel(hz: Float): String =
